@@ -4,7 +4,7 @@ An independent Shopify integration research project maintained by Waypoint. It i
 
 ## Project status
 
-**Partner feasibility only.** No Waypoint-supported Shopify payment gateway is available. Shopify requires payment gateway apps to use its Payments API and obtain authorization. WiPay's published page points to a third-party bridge; it is not a Waypoint product.
+**Reviewed (2026-10-13) — research/prototype stage.** The technically supported route for WiPay's hosted-page model is an **Offsite Payments App extension** on Shopify's Checkout Extensibility platform; the blocker is commercial (Shopify's Payments Platform is invitation-only, requiring Payments Partner approval). No Waypoint-supported Shopify payment gateway exists yet; WiPay's published page points to Payphora, a third-party bridge that is not a Waypoint product. See [PLATFORM-RESEARCH.md](PLATFORM-RESEARCH.md) for the full model comparison, requirements, and recommendation.
 
 ## Research
 
