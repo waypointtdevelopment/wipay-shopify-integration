@@ -8,7 +8,7 @@ An independent Shopify integration research project maintained by Waypoint. It i
 
 ## Research
 
-See [PLATFORM-RESEARCH.md](PLATFORM-RESEARCH.md) for the authorization gate, third-party bridge questions, and official references.
+See [PLATFORM-RESEARCH.md](PLATFORM-RESEARCH.md) for the hard constraint, what is and is not buildable today, the Payphora open point, and official references.
 
 ## Ownership and disclaimer
 
