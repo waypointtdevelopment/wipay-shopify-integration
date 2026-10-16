@@ -2,7 +2,7 @@
 
 ## Status
 
-**Research + verified prototype.** No Waypoint-supported Shopify payment gateway exists. Native checkout access is gated by Shopify Payments Partner approval (commercial gate, not technical). A working Offsite Payments App prototype was built and e2e-verified on 2026-10-13 and re-verified on 2026-10-16 (17/17 assertions, exit 0) against the real WiPay sandbox — see [prototype/](prototype/). WiPay's Shopify page points merchants to Payphora, a third-party bridge; that is not proof of a WiPay-built or WiPay-supported Shopify gateway.
+**Research + working software.** No Waypoint-supported Shopify payment gateway exists. Native checkout access is gated by Shopify Payments Partner approval (commercial gate, not technical). Two things run today without approval: the **Offsite Payments App prototype** for the native route ([prototype/](prototype/), e2e-verified 2026-10-13, hardened and re-verified 2026-10-16: 21/21 flow assertions + 4/4 hardening, exit 0, against the real WiPay sandbox) and the **approval-free reconciliation app** ([reconcile/](reconcile/), 21/21 assertions, exit 0). WiPay's Shopify page points merchants to Payphora, a third-party bridge; that is not proof of a WiPay-built or WiPay-supported Shopify gateway.
 
 ## Hard constraint
 
@@ -54,12 +54,13 @@ A hosted-redirect payment method can only be surfaced in Shopify checkout as an 
 
 None of the following requires Payments Partner approval, and all of it can start now:
 
-1. **WiPay integration core** — Payments API client, hosted-checkout redirect, server-side response-hash verification, HMAC webhook handling with replay protection, WAPI refund/reconcile. Fully testable against the WiPay sandbox today (account `1234567890`, API key `123`, `https://ttsb.wipayfinancial.com`, `environment=sandbox`). **Already implemented and covered by `php prototype/tests/e2e.php`.**
+1. **WiPay integration core** — Payments API client, hosted-checkout redirect, server-side response-hash verification, HMAC webhook handling with replay protection, WAPI refund/reconcile. Fully testable against the WiPay sandbox today (account `1234567890`, API key `123`, `https://ttsb.wipayfinancial.com`, `environment=sandbox`). **Implemented and covered by `php prototype/tests/e2e.php` (21/21) and `php prototype/tests/hardening.php` (4/4).**
 2. **Prototype hardening on a dev store** — a free Shopify Partner account plus a development store is enough to exercise the app scaffolding, manifests and CLI flow. Dev stores cannot process real transactions; 250 dev stores per organization.
 3. **Single-store custom app for reconciliation** — custom distribution requires **no Shopify approval** and can be installed on one store. Scopes: `read_orders` (60 days; `read_all_orders` needs Shopify approval) and `write_orders`; the authorizing user needs the `mark_orders_as_paid` permission. Webhook topics `orders/create`, `orders/paid`, `refunds/create` cover lifecycle events. New custom apps are created through the **Dev Dashboard** (legacy in-Admin creation closed 2026-01-01). [App distribution](https://shopify.dev/docs/apps/launch/distribution) · [Access scopes](https://shopify.dev/docs/api/usage/access-scopes)
 4. **`orderMarkAsPaid` automation** — the current Admin GraphQL mutation (API `2026-10`) exists specifically to record "payments received outside the standard checkout process" (manual/offline/external reconciliation). [Mutation reference](https://shopify.dev/docs/api/admin-graphql/latest/mutations/orderMarkAsPaid)
    - **Terms caveat:** Shopify's [API terms](https://www.shopify.com/legal/api-terms) prohibit, absent authorization, "an alternative to Shopify Checkout for checkout or payment processing." Recording a payment the merchant already received is the documented use of the mutation; a flow that *diverts* checkout and collects payment itself is not. Get written confirmation from Shopify before shipping any automated collect-then-mark-paid design.
-5. **Merchant-facing manual-payment + reconciliation guide** — a shippable deliverable that promises no checkout automation.
+   - **Implemented (2026-10-16):** [reconcile/](reconcile/) — records orders from signed `orders/create` webhooks, issues server-pinned WiPay hosted-checkout links, marks orders paid only on a signed WiPay `payment.success` with a matching amount, and reconciles missed webhooks via the WAPI. It never touches checkout. `php reconcile/tests/e2e.php` — 21/21.
+5. **Merchant-facing manual-payment + reconciliation guide** — **written:** [MERCHANT-GUIDE.md](MERCHANT-GUIDE.md). It promises no checkout automation and carries the disclaimers.
 
 ## WiPay-specific open point
 
@@ -75,7 +76,7 @@ WiPay's Shopify page points merchants to Payphora, a third-party bridge ($20/mon
 
 1. Decide whether a native checkout integration is a strategic priority or whether the short-term deliverable should be a merchant-facing manual-payment guide.
 2. If native checkout matters, ask Shopify about Payments Partner access before investing further, and ask WiPay whether it intends to pursue Shopify partner authorization.
-3. If only a guide is wanted, write an explicit manual-payment/reconciliation guide that does not promise checkout automation — optionally backed by the single-store custom app (`orderMarkAsPaid` + `orders/paid` webhooks), with the terms caveat above.
+3. If only a guide is wanted, it exists: [MERCHANT-GUIDE.md](MERCHANT-GUIDE.md) plus the [reconcile/](reconcile/) app, with the terms caveat above. Remaining pre-approval work is deploying the app on a real dev store (free Partner account) and getting written Shopify confirmation on the mark-as-paid automation.
 4. Confirm approved territories, currencies, fees, dispute/refund handling, and reconciliation flow before any production-facing document.
 5. Verify Payphora ownership, WiPay support, regions, fees, privacy/security, and order reconciliation.
 

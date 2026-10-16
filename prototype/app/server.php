@@ -30,6 +30,7 @@ $config = [
     'shopify_api_url'  => getenv('SHOPIFY_API_URL') ?: '',   // {shop}/payments_apps/api/2026-01/graphql.json
     'shopify_token'    => getenv('SHOPIFY_ACCESS_TOKEN') ?: '',
     'dev_secret'       => getenv('DEV_SHARED_SECRET') ?: '', // dev-only substitute for mTLS
+    'client_ca'        => getenv('SHOPIFY_CLIENT_CA') ?: '',  // when set, require a TLS-verified client cert
     'reconcile_token'  => getenv('RECONCILE_TOKEN') ?: 'reconcile',
     'stale_hours'      => (int)(getenv('STALE_HOURS') ?: 24),
     'debug'            => getenv('APP_DEBUG') === '1',
@@ -48,6 +49,27 @@ function store_path(): string
     return $dir . '/sessions.json';
 }
 
+/**
+ * The store keeps its JSON-file form for the prototype, but every
+ * read-modify-write now runs inside an exclusive flock, so two concurrent
+ * webhooks (or a webhook racing the buyer return) cannot lose an update.
+ * Production swaps the backend for Redis/DB and keeps this contract.
+ */
+
+/** @return resource */
+function store_lock()
+{
+    $fp = fopen(store_path() . '.lock', 'c');
+    flock($fp, LOCK_EX);
+    return $fp;
+}
+
+function store_unlock($fp): void
+{
+    flock($fp, LOCK_UN);
+    fclose($fp);
+}
+
 /** @return array<string, array<string, mixed>> */
 function store_load(): array
 {
@@ -64,6 +86,19 @@ function store_save(array $sessions): void
     file_put_contents(store_path(), json_encode($sessions, JSON_PRETTY_PRINT), LOCK_EX);
 }
 
+/** Runs a whole read-modify-write cycle under one exclusive lock. */
+function store_update(callable $fn): void
+{
+    $fp = store_lock();
+    try {
+        $sessions = store_load();
+        $fn($sessions);
+        store_save($sessions);
+    } finally {
+        store_unlock($fp);
+    }
+}
+
 function store_get(string $id): ?array
 {
     $sessions = store_load();
@@ -72,9 +107,9 @@ function store_get(string $id): ?array
 
 function store_put(string $id, array $session): void
 {
-    $sessions = store_load();
-    $sessions[$id] = $session;
-    store_save($sessions);
+    store_update(function (array &$sessions) use ($id, $session) {
+        $sessions[$id] = $session;
+    });
 }
 
 // --------------------------------------------------------------------------
@@ -104,16 +139,30 @@ function read_raw_body(): string
 }
 
 /**
- * Dev-only authentication substitute for Shopify's mTLS. Production must
- * validate Shopify's client certificate against Shopify's Payments CA
- * instead of this shared-secret header.
+ * mTLS readiness: when SHOPIFY_CLIENT_CA is set the app requires a
+ * TLS-verified client certificate (the web server terminates TLS and
+ * validates Shopify's cert chain against Shopify's Payments CA, exposing
+ * SSL_CLIENT_VERIFY). Unset, the shared-secret header remains the dev-only
+ * substitute. Pure on purpose so it is unit-testable.
  */
-function dev_auth_ok(array $config): bool
+function client_cert_ok(array $server, string $require_ca): bool
 {
+    if ($require_ca === '') {
+        return true;
+    }
+    return ($server['SSL_CLIENT_VERIFY'] ?? '') === 'SUCCESS';
+}
+
+function dev_auth_ok(array $config, ?array $server = null): bool
+{
+    $server = $server ?? $_SERVER;
+    if (!client_cert_ok($server, (string)$config['client_ca'])) {
+        return false;
+    }
     if ($config['dev_secret'] === '') {
         return true;
     }
-    $given = $_SERVER['HTTP_X_DEV_SHARED_SECRET'] ?? '';
+    $given = $server['HTTP_X_DEV_SHARED_SECRET'] ?? '';
     return is_string($given) && hash_equals($config['dev_secret'], $given);
 }
 
@@ -395,43 +444,45 @@ if ($path === '/webhook' && $method === 'POST') {
         json_out(400, ['result' => 'Failed']);
     }
 
-    $sessions = store_load();
-    if ($event_id !== '') {
-        foreach ($sessions as $s) {
-            if (in_array($event_id, $s['notes'] ?? [], true)) {
-                json_out(200, ['result' => 'Duplicate']);
-            }
-        }
-    }
-
     $type = (string)($event['event'] ?? $event['event_type'] ?? '');
     $txn = (string)($event['data']['transaction_id'] ?? '');
-    foreach ($sessions as $id => $s) {
-        if ($txn !== '' && ($s['txn'] ?? '') !== $txn) {
-            continue;
+    $result = 'Unmatched';
+    store_update(function (array &$sessions) use ($config, $event_id, $txn, $type, &$result) {
+        if ($event_id !== '') {
+            foreach ($sessions as $s) {
+                if (in_array($event_id, $s['notes'] ?? [], true)) {
+                    $result = 'Duplicate';
+                    return;
+                }
+            }
         }
         if ($txn === '') {
-            continue;
+            return;
         }
-        if ($event_id !== '') {
-            $sessions[$id]['notes'][] = $event_id;
-        }
-        if ($type === 'payment.success') {
-            if (($s['state'] ?? '') === 'open' && shopify_resolve($config, $s['gid'])) {
-                $sessions[$id]['state'] = 'resolved';
+        foreach ($sessions as $id => $s) {
+            if (($s['txn'] ?? '') !== $txn) {
+                continue;
             }
-        } elseif (in_array($type, ['payment.failed', 'payment.error', 'payment.cancelled'], true)) {
-            if (($s['state'] ?? '') === 'open' && shopify_reject($config, $s['gid'], 'PROCESSING_ERROR', 'WiPay webhook: ' . $type)) {
-                $sessions[$id]['state'] = 'rejected';
+            if ($event_id !== '') {
+                $sessions[$id]['notes'][] = $event_id;
             }
-        } else {
-            $sessions[$id]['notes'][] = 'lifecycle:' . $type;
+            if ($type === 'payment.success') {
+                if (($s['state'] ?? '') === 'open' && shopify_resolve($config, $s['gid'])) {
+                    $sessions[$id]['state'] = 'resolved';
+                }
+            } elseif (in_array($type, ['payment.failed', 'payment.error', 'payment.cancelled'], true)) {
+                if (($s['state'] ?? '') === 'open' && shopify_reject($config, $s['gid'], 'PROCESSING_ERROR', 'WiPay webhook: ' . $type)) {
+                    $sessions[$id]['state'] = 'rejected';
+                }
+            } else {
+                $sessions[$id]['notes'][] = 'lifecycle:' . $type;
+            }
+            $sessions[$id]['updated_at'] = time();
+            $result = 'Processed';
+            return;
         }
-        $sessions[$id]['updated_at'] = time();
-        store_save($sessions);
-        json_out(200, ['result' => 'Processed']);
-    }
-    json_out(200, ['result' => 'Unmatched']);
+    });
+    json_out(200, ['result' => $result]);
 }
 
 // --- POST /refund-session (Shopify -> app; acknowledge 201 empty) ---------
@@ -453,8 +504,12 @@ if ($path === '/refund-session' && $method === 'POST') {
             // X-WAPI-Key only; never combined with Authorization (WiPay rejects both).
             [$code] = http_post_json($endpoint, [], ['X-WAPI-Key: ' . $config['wapi_key']]);
             debug_log('refund_request', ['code' => $code]);
-            $sessions[$refund_id]['notes'][] = 'refund_requested:' . $code;
-            store_save($sessions);
+            $note = 'refund_requested:' . $code;
+            store_update(function (array &$sessions) use ($refund_id, $note) {
+                if (isset($sessions[$refund_id])) {
+                    $sessions[$refund_id]['notes'][] = $note;
+                }
+            });
         }
     }
     http_response_code(201);
@@ -474,9 +529,9 @@ if ($path === '/reconcile' && ($method === 'GET' || $method === 'POST')) {
         json_out(403, ['error' => 'forbidden']);
     }
     $cutoff = time() - $config['stale_hours'] * 3600;
-    $sessions = store_load();
     $settled = 0;
     $rejected = 0;
+    store_update(function (array &$sessions) use ($config, $cutoff, &$settled, &$rejected) {
     foreach ($sessions as $id => $s) {
         if (($s['state'] ?? '') !== 'open' || (int)$s['created_at'] > $cutoff) {
             continue;
@@ -513,7 +568,7 @@ if ($path === '/reconcile' && ($method === 'GET' || $method === 'POST')) {
         }
         $sessions[$id]['updated_at'] = time();
     }
-    store_save($sessions);
+    });
     json_out(200, ['result' => 'Processed', 'settled' => $settled, 'rejected' => $rejected]);
 }
 

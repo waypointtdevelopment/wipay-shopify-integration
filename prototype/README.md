@@ -5,8 +5,8 @@ WiPay's hosted checkout — built *before* the Shopify Payments Partner
 conversation, so the discussion starts from a running integration instead of
 a proposal.
 
-**Status: e2e-verified locally (17/17 assertions, exit 0), against the REAL
-WiPay sandbox.** No Partner account was needed for any of this.
+**Status: e2e-verified locally (21/21 assertions, exit 0) plus a 4/4 hardening
+suite, against the REAL WiPay sandbox.** No Partner account was needed for any of this.
 
 ## What runs locally
 
@@ -26,6 +26,7 @@ Run everything:
 
 ```
 php tests/e2e.php
+php tests/hardening.php
 ```
 
 Run the app alone (for manual poking):
@@ -52,6 +53,18 @@ SHOPIFY_API_URL=... SHOPIFY_ACCESS_TOKEN=... php -S 127.0.0.1:8081 app/server.ph
    `paymentSessionReject`; replayed event id → `Duplicate`; bad signature → 400.
 7. `kind: authorization` is refused (422) — hosted-page v1 captures on payment.
 8. Compliance webhook endpoints ack 200; health endpoint ok.
+9. A burst of eight duplicate `payment.success` webhooks yields exactly one
+   processed delivery, seven `Duplicate`s, and no new mutation on a settled
+   session (event dedupe + locked store). Costs no extra sandbox call.
+
+## Testing note — sandbox rate limits
+
+The suite makes three real Payment Requests per run against
+`ttsb.wipayfinancial.com`. That endpoint sits behind Cloudflare rate limiting
+(error **1015**, HTTP 429): running the suite in quick succession will start
+returning `wipay_unavailable` from the app. The limit clears on WiPay's
+schedule (observed: >15 minutes for this host) — wait it out and rerun; the
+suite itself needs no changes.
 
 ## Real vs mocked
 
@@ -65,22 +78,27 @@ SHOPIFY_API_URL=... SHOPIFY_ACCESS_TOKEN=... php -S 127.0.0.1:8081 app/server.ph
 
 ## Production deltas (the Partner-conversation checklist)
 
-1. **mTLS** — replace the `X-Dev-Shared-secret` header check with Shopify
-   Payments CA client-certificate validation on `/payment-session` and
-   `/refund-session`.
+1. **mTLS** — done at the app level (2026-10-16): set `SHOPIFY_CLIENT_CA` and
+   the app additionally requires a TLS-verified client certificate
+   (`SSL_CLIENT_VERIFY`) before touching a payment endpoint; the dev
+   `X-Dev-Shared-Secret` header alone is no longer sufficient. The web server
+   still has to terminate TLS and validate Shopify's chain against Shopify's
+   Payments CA. Behaviour covered by `tests/hardening.php`.
 2. **GraphQL endpoint + token** — point `SHOPIFY_API_URL` at
    `https://{shop}/payments_apps/api/2026-01/graphql.json` with a real OAuth
    access token (already the code path; only config changes).
 3. **Extension uid** — generate via Partner CLI; fill `shopify.extension.toml`.
-4. **Reject reason enum** — `PROCESSING_ERROR` is used in the prototype;
-   confirm the final enum values against the Payments Apps schema.
+4. **Reject reason enum** — verified 2026-10-16 against the Payments Apps
+   API `2026-10` enum reference: `PROCESSING_ERROR` is valid (35 values;
+   `RISKY` is deprecated in favour of `FRAUD_SUSPECTED`). No change needed.
 5. **`paymentSessionPending`** — not needed for the direct-redirect path but
    available for long-pending states; `pendingExpiresAt` ≤ 3 days.
 6. **Capture/void** — only if we later support `kind: authorization`.
 7. **Compliance webhooks** — register the three topics on the Partner
    dashboard; endpoints already exist and ack 200.
-8. **Session store** — JSON file is prototype-only; production needs a real
-   store (Redis/DB) with locking.
+8. **Session store** — the JSON store now serialises every read-modify-write
+   with `flock`, so concurrent webhooks cannot lose updates. Production still
+   wants Redis/DB behind the same contract.
 
 ## WiPay-side configuration
 

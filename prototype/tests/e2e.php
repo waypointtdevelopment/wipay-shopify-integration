@@ -255,5 +255,63 @@ check('authorization kind refused (422)', ($r9['app_http_code'] ?? 0) === 422 &&
 check('compliance webhook acknowledged', $c10 === 200);
 check('health endpoint ok', $c11 === 200);
 
+// --- 11. Burst of duplicate webhooks (dedupe under load) -----------------
+// The built-in PHP server serialises requests on Windows, so this exercises
+// burst dedupe end-to-end; the flock-based store keeps the same guarantee
+// when the app runs multi-process (the production shape).
+// Reuses the already-settled attempt-e2e-3 session so the burst costs no
+// extra sandbox Payment Request — the sandbox rate-limits request bursts
+// (Cloudflare 1015), and the dedupe guarantee is what is under test.
+[, $stateBefore] = req('GET', $SHOP_BASE . '/state');
+$mutBefore = count(json_decode($stateBefore, true)['mutations'] ?? []);
+$ts4 = (string)time();
+$event4 = json_encode([
+    'id' => 'evt-e2e-race-1',
+    'event' => 'payment.success',
+    'occurred_at' => gmdate('c'),
+    'data' => ['transaction_id' => $s3['txn'], 'order_id' => $s3['wipay_order'], 'status' => 'success'],
+    'meta' => [],
+]);
+$sig4 = 'sha256=' . hash_hmac('sha256', $ts4 . '.' . $event4, $WEBHOOK_SECRET);
+$hdrs4 = [
+    'Content-Type: application/json',
+    'X-WiPay-Webhook-Signature: ' . $sig4,
+    'X-WiPay-Webhook-Timestamp: ' . $ts4,
+    'X-WiPay-Webhook-Id: evt-e2e-race-1',
+];
+$mh = curl_multi_init();
+$handles = [];
+for ($i = 0; $i < 8; $i++) {
+    $ch = curl_init($APP_BASE . '/webhook');
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true, CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 30,
+        CURLOPT_POSTFIELDS => $event4, CURLOPT_HTTPHEADER => $hdrs4,
+    ]);
+    curl_multi_add_handle($mh, $ch);
+    $handles[] = $ch;
+}
+do {
+    $st = curl_multi_exec($mh, $running);
+    if ($running) {
+        curl_multi_select($mh, 0.05);
+    }
+} while ($running && $st === CURLM_OK);
+$responses = [];
+foreach ($handles as $ch) {
+    $responses[] = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE) . ':' . (string)curl_multi_getcontent($ch);
+    curl_multi_remove_handle($mh, $ch);
+    curl_close($ch);
+}
+curl_multi_close($mh);
+$ok200 = count(array_filter($responses, fn($r) => str_starts_with($r, '200:')));
+$processed = count(array_filter($responses, fn($r) => str_contains($r, 'Processed')));
+$duplicates = count(array_filter($responses, fn($r) => str_contains($r, 'Duplicate')));
+check('burst of duplicate webhooks all accepted', $ok200 === 8, json_encode($responses));
+check('exactly one webhook processed under burst', $processed === 1, json_encode($responses));
+check('remaining burst deliveries deduplicated', $duplicates === 7, json_encode($responses));
+[, $stateBody] = req('GET', $SHOP_BASE . '/state');
+$state = json_decode($stateBody, true);
+check('burst on a settled session triggers no new mutation', count($state['mutations'] ?? []) === $mutBefore, json_encode($state['mutations'] ?? []));
+
 echo "\n{$pass} passed, {$fail} failed\n";
 exit($fail === 0 ? 0 : 1);

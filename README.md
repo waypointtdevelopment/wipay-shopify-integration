@@ -12,7 +12,13 @@ An independent Shopify integration research project maintained by Waypoint. It i
 
 There is no native WiPay checkout integration you can install from this repository. If a Shopify merchant still wants to use WiPay, the realistic path is a manual, off-checkout workflow: accept the order in Shopify, direct the customer to a WiPay payment link or hosted checkout through a separate backend, and reconcile the verified payment against the Shopify order by hand.
 
-That is a merchant-operated workaround, not an automated Shopify integration. It does not add WiPay as a Shopify payment method and it does not automatically update Shopify orders. Details and caveats: see the interim-development section of [PLATFORM-RESEARCH.md](PLATFORM-RESEARCH.md).
+That is a merchant-operated workaround, not an automated Shopify integration. It does not add WiPay as a Shopify payment method and it does not automatically update Shopify orders. [reconcile/](reconcile/) automates the reconciliation half of that workflow — order recorded, payment verified server-side, order marked paid — without touching checkout; see the terms caveat in its README.
+
+## What is in this repository
+
+- [prototype/](prototype/) — the **Offsite Payments App** prototype for the native-checkout route (blocked on Shopify Payments Partner approval, but built, hardened and sandbox-verified: `php prototype/tests/e2e.php`, 21/21).
+- [reconcile/](reconcile/) — the **approval-free reconciliation app** a merchant can run today: records orders, issues server-pinned WiPay hosted-checkout links, marks orders paid via `orderMarkAsPaid` on verified WiPay webhooks (`php reconcile/tests/e2e.php`, 21/21).
+- [MERCHANT-GUIDE.md](MERCHANT-GUIDE.md) — merchant-facing instructions for accepting WiPay on Shopify today.
 
 ## Research
 
