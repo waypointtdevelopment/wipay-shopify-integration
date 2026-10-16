@@ -53,6 +53,11 @@ function req(string $method, string $url, ?string $body = null, array $headers =
 }
 
 // --- Clean state -----------------------------------------------------------
+// data/ is gitignored — create it on a fresh clone so the log pipes below can open.
+if (!is_dir($ROOT . '/data')) {
+    mkdir($ROOT . '/data', 0777, true);
+}
+
 @unlink($ROOT . '/data/sessions.json');
 @unlink($ROOT . '/data/mock_shopify_state.json');
 
