@@ -1,0 +1,25 @@
+# Offsite payments extension manifest (Shopify Payments Apps, api 2026-01).
+# Sources: shopify.dev "Configure payments extensions".
+# Placeholders: YOUR_UID (generate via Partner CLI), YOUR_APP_URL.
+# supported_countries: the WiPay platform territories; confirm against
+# Shopify's requirements review before submission.
+
+api_version = "2026-01"
+
+[[extensions]]
+name = "WiPay (Waypoint)"
+handle = "wipay-waypoint-offsite"
+type = "payments_extension"
+uid = "YOUR_UID"
+merchant_label = "WiPay"
+payment_session_url = "YOUR_APP_URL/payment-session"
+refund_session_url = "YOUR_APP_URL/refund-session"
+supported_countries = ["TT", "JM", "BB", "GY", "GD"]
+supported_payment_methods = ["visa", "master", "amex"]
+supports_3ds = false
+supports_installments = false
+supports_deferred_payments = false
+test_mode_available = true
+
+[[extensions.targeting]]
+target = "payments.offsite.render"

@@ -1,0 +1,23 @@
+# Shopify app manifest — ready for a Partner organization.
+# Placeholders: YOUR_APP_NAME, YOUR_APP_URL (deployed app base URL).
+# Generate a real uid with: shopify app generate extension (Partner CLI)
+
+name = "YOUR_APP_NAME"
+handle = "wipay-waypoint"
+application_url = "YOUR_APP_URL"
+embedded = false
+
+[access_scopes]
+# Payments Apps API access is granted by Payments Partner approval,
+# not by scopes declared here. Keep the payment extension limited to
+# the Payments Apps API + mandatory compliance webhooks.
+
+[auth]
+redirect_urls = ["YOUR_APP_URL/auth/callback"]
+
+[webhooks]
+api_version = "2026-01"
+
+  [[webhooks.subscriptions]]
+  compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+  uri = "YOUR_APP_URL/compliance"
